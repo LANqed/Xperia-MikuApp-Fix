@@ -1,0 +1,13 @@
+services:
+  mikuxperia-server:
+    build: .
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:8080:8080
+    volumes:
+      - ./miku.conf:/app/miku.conf:ro
+      - ./music.json:/app/music.json
+      - ./media:/app/media
+      - ./webui-stats.json:/app/webui-stats.json
+      - ./ainews-cache.json:/app/ainews-cache.json
+      - ./tasks-state.json:/app/tasks-state.json

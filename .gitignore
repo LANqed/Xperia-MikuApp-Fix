@@ -1,0 +1,41 @@
+# ===== 运行缓存 / 临时文件 =====
+__pycache__/
+_pycache_/
+*.py[cod]
+.pytest_cache/
+
+# ===== 编辑器 / 本机工具 =====
+opencode.json
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# ===== 运行时由服务自动生成的状态文件 =====
+webui-stats.json
+ainews-cache.json
+tasks-state.json
+*.json.tmp
+
+# ===== 密钥与私密文件（不要上传） =====
+miku.conf
+bilibili.cookies.txt
+*.cookies.txt
+
+# ===== 改机脚本的中间产物与输出（重新运行脚本即可生成） =====
+apk-work/
+patched/
+
+# ===== 可再获取的第三方二进制（本地运行改机脚本仍需要，GitHub Action 缺省会自动下载） =====
+apktool_2.9.3.jar
+uber-apk-signer-1.3.0.jar
+
+# ===== 大体积第三方联动包（约 387 MB，不纳入版本库） =====
+Xperia_feat_original_FE_V5a.zip
+
+# ===== 由上传/同步生成的媒体内容（手动维护的样例歌曲仍入库） =====
+media/uploads/
+media/bilibili/
+
+# ===== Docker =====
+compose.yml

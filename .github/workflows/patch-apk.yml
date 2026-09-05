@@ -1,0 +1,55 @@
+name: 改机 APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 客户端要访问的服务端地址，例如 http://miku.example.com
+        required: true
+        default: http://192.168.31.104:8080
+      no_shared_lib:
+        description: 设备没有刷 Xperia 联动包时勾选（去掉 uses-library 依赖）
+        type: boolean
+        default: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 安装 JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: 确保 apktool 与签名器（仓库里已有就跳过）
+        shell: bash
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          if [ ! -f apktool_2.9.3.jar ]; then
+            curl -fsSL -o apktool_2.9.3.jar \
+              https://github.com/iBotPeaches/Apktool/releases/download/v2.9.3/apktool_2.9.3.jar
+          fi
+          if [ ! -f uber-apk-signer-1.3.0.jar ]; then
+            curl -fsSL -o uber-apk-signer-1.3.0.jar \
+              https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar
+          fi
+
+      - name: 执行改机
+        shell: bash
+        run: |
+          args="${{ github.event.inputs.base_url }}"
+          if [ "${{ github.event.inputs.no_shared_lib }}" == "true" ]; then
+            args="$args noslib"
+          fi
+          bash patch-apk.sh $args
+
+      - name: 上传改机成品
+        uses: actions/upload-artifact@v4
+        with:
+          name: patched-apks
+          path: patched/
+          if-no-files-found: error

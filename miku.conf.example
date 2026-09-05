@@ -1,0 +1,100 @@
+# Mikuxperia 兼容服务端配置文件。
+# 本文件为 UTF-8 编码。注释必须单独一行，以 # 或 ; 开头；行尾不能写注释。
+# 数值项（端口、经纬度、各种 seconds）不能留空，留空会在启动时抛
+# ValueError；想使用默认值请把整行删掉。
+
+[server]
+listen_host = 0.0.0.0
+listen_port = 8080
+# 部署完成后填客户端实际访问的公网根地址，末尾不要加斜杠。
+# 局域网调试时留空，服务端会改用请求里的 Host 头拼地址。
+public_base_url = http://example.com
+
+[qweather]
+# 填和风天气控制台里显示的账号专属 API Host，不要填完整 URL。
+api_host = 
+# api_key 与 bearer_token 二选一，不要同时填；同时填时优先用 bearer_token。
+api_key = 
+bearer_token =
+cache_seconds = 1800
+
+[weather]
+# 客户端 APK 原本传来的 AREA 会被忽略，所有小组件都用这里配置的位置。
+# city、latitude、longitude 三项必填，其中经纬度留空会导致服务无法启动。
+city = 
+latitude = 
+longitude = 
+
+[music]
+# 相对路径都相对于本文件所在目录解析。
+media_root = media
+catalog = music.json
+
+[bilibili]
+# 收藏夹同步的配置，只被 sync_bilibili_favorites.py 和面板的缓存概览使用。
+# folder_ids 是收藏夹 ID，可用换行、空格或逗号分隔，必须是不重复的正整数。
+folder_ids =
+    3275482587
+    4030204287
+    4098211987
+    4021189187
+    4100670187
+    4075169487
+cookie_file = bilibili.cookies.txt
+media_root = media/bilibili
+catalog = music.json
+# page_size 是收藏夹接口的分页大小，上限 20。
+page_size = 20
+# max_videos_per_folder 为 0 表示不限制每个收藏夹处理的视频数量。
+max_videos_per_folder = 0
+# 每个播放列表最多放多少首，超出会自动拆成多个列表，上限 60。
+songs_per_playlist = 50
+# 为 true 时重新下载已经缓存过的音频。
+redownload_existing = false
+
+[tasks]
+# 后台定时任务。间隔单位是秒，也可以在管理面板里修改，
+# 修改结果会写入 state_file，并且优先于本节的初始值。
+state_file = tasks-state.json
+weather_enabled = true
+weather_interval_seconds = 1800
+news_enabled = true
+news_interval_seconds = 3600
+# Bilibili 同步会下载文件，因此默认关闭，需要时再打开。
+bilibili_enabled = false
+bilibili_interval_seconds = 21600
+bilibili_timeout_seconds = 3600
+# 缓存清理会删除媒体目录下所有未被 music.json 引用的文件，默认开启。
+# 媒体目录里放了其他用途的文件时，请取消下面两行的注释并关掉它。
+# cache_cleanup_enabled = false
+# cache_cleanup_interval_seconds = 604800
+
+[webui]
+# /admin 上的管理面板。必须 enabled = true 且设置了 password 才会启用。
+# password 以明文保存，公网部署前务必改成强密码，并把本文件权限设为 640。
+enabled = true
+password = 123456
+session_hours = 12
+stats_file = webui-stats.json
+
+[ainews]
+# AI 汇总的 Miku 新闻：Tavily 提供搜索结果，
+# 任何 OpenAI 兼容的 chat completions 接口负责整理成中文条目。
+enabled = true
+tavily_api_key = 
+tavily_endpoint = https://api.tavily.com/search
+tavily_max_results = 10
+tavily_topic = news
+# 每行一个搜索查询，多个查询的结果会按链接去重后合并。
+search_queries =
+    初音ミク 新曲 最新情報
+    初音未来 最新新闻 动态
+    Hatsune Miku news new song
+# 下面三项留空则直接发布原始搜索结果，不做 AI 摘要。
+openai_base_url = 
+openai_api_key = 
+openai_model = 
+refresh_seconds = 3600
+max_items = 8
+timeout_seconds = 30
+cache_file = ainews-cache.json

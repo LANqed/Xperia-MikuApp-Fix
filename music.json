@@ -1,0 +1,75 @@
+{
+  "playlists": [
+    {
+      "id": 1,
+      "version": 1,
+      "title": "ミクスペリエンス e.p.",
+      "description": "This is for Miku and Xperia User",
+      "brief_description": "ミクスペリエンス e.p.",
+      "image": "Cover.jpg",
+      "brief_image": "Cover_thumb.jpg",
+      "songs": [
+        {
+          "id": "01",
+          "title": "Opening -Hatsune Calling-",
+          "artist": "円盤P",
+          "date": "2013.08.28",
+          "music": "01.mp3",
+          "thumbnail": "Cover.jpg",
+          "lyrics": "",
+          "link": "http://39miku.lanqed.top"
+        },
+        {
+          "id": "02",
+          "title": "overwriter",
+          "artist": "tilt-six",
+          "date": "2013.08.28",
+          "music": "02.mp3",
+          "thumbnail": "Cover.jpg",
+          "lyrics": "02.txt",
+          "link": "http://39miku.lanqed.top"
+        },
+        {
+          "id": "03",
+          "title": "テクノロジーに夢乗せて",
+          "artist": "きくお",
+          "date": "2013.08.28",
+          "music": "03.mp3",
+          "thumbnail": "Cover.jpg",
+          "lyrics": "03.txt",
+          "link": "http://39miku.lanqed.top"
+        },
+        {
+          "id": "04",
+          "title": "ひとりぼっちのユーエフオー",
+          "artist": "ピノキオピー",
+          "date": "2013.08.28",
+          "music": "04.mp3",
+          "thumbnail": "Cover.jpg",
+          "lyrics": "04.txt",
+          "link": "http://39miku.lanqed.top"
+        },
+        {
+          "id": "05",
+          "title": "Packaged (Shipping in 2013 remix)",
+          "artist": "livetune",
+          "date": "2013.08.28",
+          "music": "05.mp3",
+          "thumbnail": "Cover.jpg",
+          "lyrics": "05.txt",
+          "link": "http://39miku.lanqed.top"
+        },
+        {
+          "id": "06",
+          "title": "Ending -Weaving Lines-",
+          "artist": "Lemm",
+          "date": "2013.08.28",
+          "music": "06.mp3",
+          "thumbnail": "Cover.jpg",
+          "lyrics": "",
+          "link": "http://39miku.lanqed.top"
+        }
+      ]
+    }
+  ]
+}
