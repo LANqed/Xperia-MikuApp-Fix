@@ -33,6 +33,9 @@ import webui
 SERVER_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = SERVER_DIR / "miku.conf"
 
+# 单次 socket 读操作（请求头/请求体）的空闲超时秒数，由 [server] read_timeout_seconds 覆盖。
+READ_TIMEOUT_SECONDS = 120
+
 LISTEN_HOST = "0.0.0.0"
 LISTEN_PORT = 8080
 PUBLIC_BASE_URL = ""
@@ -79,10 +82,20 @@ PNG = base64.b64decode(
 )
 
 
+def config_int(parser: configparser.ConfigParser, section: str, option: str, default: int, low: int, high: int) -> int:
+    """读取整数配置项；缺省、留空或非法时退回 default，并夹在 [low, high] 范围内。"""
+    try:
+        value = parser.getint(section, option, fallback=default)
+    except (configparser.Error, ValueError, TypeError):
+        value = default
+    return max(low, min(high, value))
+
+
 def configure(path: Path) -> None:
     global LISTEN_HOST, LISTEN_PORT, PUBLIC_BASE_URL
     global QWEATHER_API_HOST, QWEATHER_API_KEY, QWEATHER_BEARER_TOKEN, QWEATHER_CACHE_SECONDS
     global WEATHER_LATITUDE, WEATHER_LONGITUDE, WEATHER_CITY, MEDIA_ROOT, MUSIC_CONFIG
+    global READ_TIMEOUT_SECONDS
 
     path = path.expanduser().resolve()
     parser = configparser.ConfigParser(interpolation=None)
@@ -99,6 +112,7 @@ def configure(path: Path) -> None:
 
     LISTEN_HOST = parser.get("server", "listen_host", fallback="0.0.0.0").strip()
     LISTEN_PORT = parser.getint("server", "listen_port", fallback=8080)
+    READ_TIMEOUT_SECONDS = config_int(parser, "server", "read_timeout_seconds", 120, 5, 3600)
     PUBLIC_BASE_URL = parser.get("server", "public_base_url", fallback="").strip().rstrip("/")
     QWEATHER_API_HOST = parser.get("qweather", "api_host", fallback="").strip().removeprefix("https://").rstrip("/")
     QWEATHER_API_KEY = parser.get("qweather", "api_key", fallback="").strip()
@@ -640,6 +654,7 @@ class CompatibilityHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
         self.track(path)
+        admin_base = webui.admin_base()
         routes = {
             "/resources/xml/MikuNews/list.xml": self.news_xml,
             "/resources/xml/MikuDownloader/applist.xml": self.apps_xml,
@@ -656,8 +671,11 @@ class CompatibilityHandler(BaseHTTPRequestHandler):
                 "today_requests": webui.stats_summary()["today"]["requests"],
             }, ensure_ascii=False)
             self.send_text(body, "application/json; charset=UTF-8", 200 if report["status"] != "error" else 503)
-        elif path.startswith("/admin"):
-            self.admin_get(path)
+        elif path == admin_base or path.startswith(admin_base + "/"):
+            if not self.admin_https_ok():
+                self.upgrade_to_https()
+                return
+            self.admin_get(path, admin_base)
         elif path in routes:
             try:
                 self.send_text(routes[path]())
@@ -675,18 +693,18 @@ class CompatibilityHandler(BaseHTTPRequestHandler):
         elif path == "/" or path.startswith("/pages/"):
             self.send_text("<html><body><h1>Mikuxperia compatibility server</h1></body></html>", "text/html; charset=UTF-8")
         else:
-            self.send_text("Not found", "text/plain; charset=UTF-8")
+            self.send_text("Not found", "text/plain; charset=UTF-8", 404)
 
-    def admin_get(self, path: str) -> None:
+    def admin_get(self, path: str, base: str) -> None:
         if not webui.available():
             self.send_text("WebUI 未启用。请在 miku.conf 的 [webui] 中设置 enabled 与 password。", "text/plain; charset=UTF-8", 404)
             return
-        if path in ("/admin", "/admin/"):
+        if path in (base, base + "/"):
             if not self.authenticated():
                 self.send_html(webui.login_page())
                 return
             self.send_html(webui.dashboard_page(admin_snapshot()))
-        elif path == "/admin/api/status":
+        elif path == f"{base}/api/status":
             if not self.authenticated():
                 self.send_text('{"error":"unauthorized"}', "application/json; charset=UTF-8", 401)
                 return
@@ -724,8 +742,12 @@ class CompatibilityHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]
         self.track(path)
+        admin_base = webui.admin_base()
         content_type = self.headers.get("Content-Type", "")
-        if path == "/admin/upload" and "multipart/form-data" in content_type.lower():
+        if (path == admin_base or path.startswith(admin_base + "/")) and not self.admin_https_ok():
+            self.upgrade_to_https()
+            return
+        if path == f"{admin_base}/upload" and "multipart/form-data" in content_type.lower():
             self.admin_upload(content_type)
             return
         length = int(self.headers.get("Content-Length", "0"))
@@ -743,17 +765,17 @@ class CompatibilityHandler(BaseHTTPRequestHandler):
             except RuntimeError as error:
                 print(f"Music configuration error: {error}")
                 self.send_text(str(error), "text/plain; charset=UTF-8", 500)
-        elif path.startswith("/admin"):
-            self.admin_post(path, form)
+        elif path == admin_base or path.startswith(admin_base + "/"):
+            self.admin_post(path, admin_base, form)
         else:
-            self.send_text("Not found", "text/plain; charset=UTF-8")
+            self.send_text("Not found", "text/plain; charset=UTF-8", 404)
 
     def admin_upload(self, content_type: str) -> None:
         if not webui.available():
             self.send_text("WebUI 未启用", "text/plain; charset=UTF-8", 404)
             return
         if not self.authenticated():
-            self.redirect("/admin")
+            self.redirect(webui.admin_base())
             return
         length = int(self.headers.get("Content-Length", "0"))
         if length <= 0:
@@ -774,29 +796,38 @@ class CompatibilityHandler(BaseHTTPRequestHandler):
             print(f"Upload failed: {error}")
             self.send_html(webui.dashboard_page(admin_snapshot(error=f"上传失败：{error}")), 500)
 
-    def admin_post(self, path: str, form: dict[str, list[str]]) -> None:
+    def admin_post(self, path: str, base: str, form: dict[str, list[str]]) -> None:
         if not webui.available():
             self.send_text("WebUI 未启用", "text/plain; charset=UTF-8", 404)
             return
-        if path == "/admin/login":
+        secure = self.https_request()
+        if path == f"{base}/login":
+            allowed, retry_after = webui.gate_status(self.client_address[0])
+            if not allowed:
+                self.send_html(
+                    webui.login_page(f"尝试次数过多，请 {retry_after} 秒后再试"),
+                    429,
+                    {"Retry-After": str(retry_after)},
+                )
+                return
             if webui.password_matches(form.get("password", [""])[0]):
-                token = webui.create_session()
-                cookie = f"miku_admin={token}; Path=/admin; HttpOnly; SameSite=Strict; Max-Age={webui.SESSION_HOURS * 3600}"
-                self.redirect("/admin", {"Set-Cookie": cookie})
+                webui.gate_success(self.client_address[0])
+                self.redirect(base, {"Set-Cookie": webui.session_cookie(base, secure)})
             else:
+                webui.gate_failure(self.client_address[0])
                 self.send_html(webui.login_page("密码错误"), 401)
             return
         if not self.authenticated():
-            self.redirect("/admin")
+            self.redirect(base)
             return
-        if path == "/admin/logout":
+        if path == f"{base}/logout":
             webui.drop_session(webui.session_token(self.headers.get("Cookie", "")))
-            self.redirect("/admin", {"Set-Cookie": "miku_admin=; Path=/admin; Max-Age=0"})
-        elif path == "/admin/task/run":
+            self.redirect(base, {"Set-Cookie": webui.clear_session_cookie(base, secure)})
+        elif path == f"{base}/task/run":
             name = form.get("task", [""])[0].strip()
             ok, message = tasks.run_async(name)
             self.send_html(webui.dashboard_page(admin_snapshot(message if ok else "", "" if ok else message)))
-        elif path == "/admin/task/interval":
+        elif path == f"{base}/task/interval":
             name = form.get("task", [""])[0].strip()
             raw = form.get("interval", [""])[0].strip()
             unit = form.get("unit", ["minutes"])[0].strip()
@@ -808,12 +839,12 @@ class CompatibilityHandler(BaseHTTPRequestHandler):
                 return
             ok, message = tasks.set_interval(name, seconds)
             self.send_html(webui.dashboard_page(admin_snapshot(message if ok else "", "" if ok else message)))
-        elif path == "/admin/task/toggle":
+        elif path == f"{base}/task/toggle":
             name = form.get("task", [""])[0].strip()
             enabled = form.get("enabled", ["0"])[0].strip() in ("1", "true", "on", "yes")
             ok, message = tasks.set_enabled(name, enabled)
             self.send_html(webui.dashboard_page(admin_snapshot(message if ok else "", "" if ok else message)))
-        elif path == "/admin/news/refresh":
+        elif path == f"{base}/news/refresh":
             ok, message = tasks.run_async("news")
             self.send_html(webui.dashboard_page(admin_snapshot(message if ok else "", "" if ok else message)))
         else:
@@ -968,6 +999,56 @@ class CompatibilityHandler(BaseHTTPRequestHandler):
         return f'''<?xml version="1.0" encoding="UTF-8"?>
 <response><id>{int(area)}</id><point>{escape(WEATHER_CITY)}（和风天气）</point><update>{update}</update>{''.join(groups)}</response>'''
 
+    def https_request(self) -> bool:
+        """判断当前请求是否应视为 HTTPS（决定会话 Cookie Secure 与 https 限制）。
+
+        依次识别：配置为 https 的 public_base_url、可信反代注入的
+        X-Forwarded-Proto / X-Forwarded-Ssl、Cloudflare 的 CF-Visitor。
+        """
+        if PUBLIC_BASE_URL.lower().startswith("https://"):
+            return True
+        proto = self.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip().lower()
+        if proto == "https":
+            return True
+        ssl = self.headers.get("X-Forwarded-Ssl", "").strip().lower()
+        if ssl in ("on", "1", "true"):
+            return True
+        try:
+            visitor = json.loads(self.headers.get("CF-Visitor", ""))
+            if visitor.get("scheme") == "https":
+                return True
+        except (ValueError, TypeError):
+            pass
+        return False
+
+    def admin_https_ok(self) -> bool:
+        """[webui] require_https = true 时，管理面板只接受 HTTPS 请求。"""
+        return not webui.require_https() or self.https_request()
+
+    def upgrade_to_https(self) -> None:
+        """管理面板的明文请求：GET 升级到 https，其余方法直接拒绝。"""
+        host = self.headers.get("Host", "")
+        if self.command == "GET" and host:
+            location = f"https://{host}{self.path}"
+            self.send_bytes(b"", "text/html; charset=UTF-8", 302, {"Location": location})
+            return
+        self.send_html("<html><body><h1>管理面板仅允许通过 HTTPS 访问</h1></body></html>", 403)
+
+    def setup(self) -> None:
+        super().setup()
+        try:
+            # 请求头/请求体的单次读操作超时，防止 slowloris 占住线程。
+            self.connection.settimeout(READ_TIMEOUT_SECONDS)
+        except OSError:
+            pass
+
+    def handle(self) -> None:
+        try:
+            super().handle()
+        except (TimeoutError, ConnectionResetError, BrokenPipeError):
+            # 读超时或客户端提前断开：安静关闭连接，不打印堆栈。
+            pass
+
     def log_message(self, format: str, *args: object) -> None:
         print(f"{self.client_address[0]} - {format % args}")
 
@@ -986,7 +1067,10 @@ def main() -> None:
     print(f"Config: {args.config.expanduser().resolve()}")
     print(f"Serving on http://{LISTEN_HOST}:{LISTEN_PORT}")
     if webui.available():
-        print(f"Admin WebUI: http://{LISTEN_HOST}:{LISTEN_PORT}/admin")
+        scheme = "https" if webui.require_https() else "http"
+        print(f"Admin WebUI: {scheme}://{LISTEN_HOST}:{LISTEN_PORT}{webui.admin_base()}")
+        if not webui.require_https():
+            print("  Warning: admin panel is NOT restricted to HTTPS ([webui] require_https = true 可开启)")
     else:
         print("Admin WebUI disabled: set [webui] enabled and password in the config file")
     for task in tasks.status():

@@ -6,6 +6,8 @@
 [server]
 listen_host = 0.0.0.0
 listen_port = 8080
+# 单次读请求（请求头/请求体）的空闲超时秒数，防止慢速连接长期占住线程，默认 120。
+read_timeout_seconds = 120
 # 部署完成后填客户端实际访问的公网根地址，末尾不要加斜杠。
 # 局域网调试时留空，服务端会改用请求里的 Host 头拼地址。
 public_base_url = http://example.com
@@ -72,6 +74,18 @@ bilibili_timeout_seconds = 3600
 [webui]
 # /admin 上的管理面板。必须 enabled = true 且设置了 password 才会启用。
 # password 以明文保存，公网部署前务必改成强密码，并把本文件权限设为 640。
+# admin_secret 非空（8-64 位字母、数字或 -_）时，面板入口从 /admin 隐藏到
+# /admin/<secret>，裸 /admin 返回 404。公网部署建议设置，例如：
+#   admin_secret = sdb9a8sd7b
+admin_secret =
+# 登录限速（数值项不能留空，删掉整行使用默认值）：窗口秒数 / 窗口内最大失败次数 / 封禁秒数。
+login_window_seconds = 600
+login_max_attempts = 5
+login_lockout_seconds = 900
+# 管理面板仅允许 HTTPS 打开（明文 GET 自动跳 https，POST 返回 403）。
+# 依赖反代/Caddy/CF 注入 X-Forwarded-Proto 等头来识别协议；
+# 纯局域网明文调试时请改为 false。
+require_https = true
 enabled = true
 password = 123456
 session_hours = 12

@@ -38,12 +38,77 @@ _STATS: dict[str, object] = {"days": {}, "total": 0}
 _STARTED_AT = time.time()
 _UNIQUE_TODAY: dict[str, set[str]] = {}
 
+# 管理面板的访问根路径。默认 /admin；配置 [webui] admin_secret = <8-64位随机串>
+# 后变为 /admin/<secret>，裸 /admin 返回 404，避免入口被扫描器发现。
+_ADMIN_BASE = "/admin"
+# require_https = true 时，管理面板只接受 HTTPS 请求（明文 GET 302 跳 https，POST 403）。
+REQUIRE_HTTPS = False
+
+
+class LoginGate:
+    """登录限速器：按 key 统计固定时间窗内的失败次数，超限后封禁 lockout 秒。
+
+    纯内存、线程安全；重启后计数清零（攻击者同样丢失进度，配合强口令与
+    https 入口足够日常防护）。
+    """
+
+    def __init__(self, window_seconds: int = 600, max_attempts: int = 5, lockout_seconds: int = 900) -> None:
+        self.window = max(30, window_seconds)
+        self.max_attempts = max(1, max_attempts)
+        self.lockout = max(1, lockout_seconds)
+        self._lock = threading.Lock()
+        self._failures: dict[str, tuple[float, int]] = {}  # key -> (窗口起点, 失败次数)
+        self._blocked: dict[str, float] = {}  # key -> 解封时间戳
+
+    def check(self, key: str) -> tuple[bool, int]:
+        """返回 (是否允许本次尝试, 需要等待的秒数)。"""
+        now = time.time()
+        with self._lock:
+            blocked_until = self._blocked.get(key, 0.0)
+            if blocked_until > now:
+                return False, int(blocked_until - now) + 1
+            start, failures = self._failures.get(key, (now, 0))
+            if now - start >= self.window:
+                self._failures.pop(key, None)
+                return True, 0
+            if failures >= self.max_attempts:
+                self._blocked[key] = now + self.lockout
+                self._failures.pop(key, None)
+                return False, self.lockout
+            return True, 0
+
+    def failure(self, key: str) -> None:
+        now = time.time()
+        with self._lock:
+            start, failures = self._failures.get(key, (now, 0))
+            if now - start >= self.window:
+                self._failures[key] = (now, 1)
+            else:
+                self._failures[key] = (start, failures + 1)
+            if len(self._failures) > 512:  # 有界内存：顺带清理过期条目
+                self._prune(now)
+
+    def success(self, key: str) -> None:
+        with self._lock:
+            self._failures.pop(key, None)
+            self._blocked.pop(key, None)
+
+    def _prune(self, now: float) -> None:
+        window_cutoff = now - self.window
+        for key in [key for key, (start, _) in self._failures.items() if start < window_cutoff]:
+            self._failures.pop(key, None)
+        for key in [key for key, until in self._blocked.items() if until < now]:
+            self._blocked.pop(key, None)
+
+
+LOGIN_GATE = LoginGate()
+
 
 def configure(parser: configparser.ConfigParser, base_dir: Path) -> None:
     """读取可选的 [webui] 小节，以及用于状态展示的 Bilibili 路径。"""
     global ENABLED, PASSWORD, SESSION_HOURS, STATS_FILE
     global BILIBILI_COOKIE_FILE, BILIBILI_MEDIA_ROOT, BILIBILI_FOLDER_IDS
-    global _SESSIONS, _STATS, _UNIQUE_TODAY
+    global _SESSIONS, _STATS, _UNIQUE_TODAY, _ADMIN_BASE, LOGIN_GATE, REQUIRE_HTTPS
 
     def resolve(value: str) -> Path:
         path = Path(value)
@@ -54,11 +119,25 @@ def configure(parser: configparser.ConfigParser, base_dir: Path) -> None:
         PASSWORD = parser.get("webui", "password", fallback="").strip()
         SESSION_HOURS = max(1, min(720, parser.getint("webui", "session_hours", fallback=12)))
         STATS_FILE = resolve(parser.get("webui", "stats_file", fallback="webui-stats.json").strip() or "webui-stats.json")
+        secret = parser.get("webui", "admin_secret", fallback="").strip()
+        if secret and not re.fullmatch(r"[0-9A-Za-z_-]{8,64}", secret):
+            raise RuntimeError("webui.admin_secret 必须是 8-64 位字母、数字或 -_；不想隐藏入口时请删掉该行或留空")
+        _ADMIN_BASE = f"/admin/{secret}" if secret else "/admin"
+        REQUIRE_HTTPS = parser.getboolean("webui", "require_https", fallback=False)
+        # 登录限速（数值项不能留空，删掉整行使用默认值）。
+        LOGIN_GATE = LoginGate(
+            window_seconds=parser.getint("webui", "login_window_seconds", fallback=600),
+            max_attempts=parser.getint("webui", "login_max_attempts", fallback=5),
+            lockout_seconds=parser.getint("webui", "login_lockout_seconds", fallback=900),
+        )
     else:
         ENABLED = False
         PASSWORD = ""
         SESSION_HOURS = 12
         STATS_FILE = resolve("webui-stats.json")
+        _ADMIN_BASE = "/admin"
+        REQUIRE_HTTPS = False
+        LOGIN_GATE = LoginGate()
 
     BILIBILI_COOKIE_FILE = None
     BILIBILI_MEDIA_ROOT = None
@@ -83,6 +162,16 @@ def configure(parser: configparser.ConfigParser, base_dir: Path) -> None:
 
 def available() -> bool:
     return bool(ENABLED and PASSWORD)
+
+
+def admin_base() -> str:
+    """管理面板的访问根路径（/admin 或配置了 admin_secret 后的 /admin/<secret>）。"""
+    return _ADMIN_BASE
+
+
+def require_https() -> bool:
+    """管理面板是否强制 HTTPS（明文 GET 跳 https，POST 拒绝）。"""
+    return REQUIRE_HTTPS
 
 
 def today_key() -> str:
@@ -305,6 +394,45 @@ def session_token(cookie_header: str) -> str:
     return morsel.value if morsel else ""
 
 
+def _cookie_string(value: str, base: str, secure: bool, max_age: int) -> str:
+    flags = f"Path={base}; HttpOnly; SameSite=Strict"
+    if secure:
+        flags += "; Secure"
+    return f"{value}; {flags}; Max-Age={max_age}"
+
+
+def session_cookie(base: str, secure: bool) -> str:
+    """创建新会话并返回可直接放入 Set-Cookie 头的完整字符串。"""
+    return _cookie_string(f"miku_admin={create_session()}", base, secure, SESSION_HOURS * 3600)
+
+
+def clear_session_cookie(base: str, secure: bool) -> str:
+    """退出登录用的清空 Cookie 字符串。"""
+    return _cookie_string("miku_admin=", base, secure, 0)
+
+
+def gate_status(client_ip: str) -> tuple[bool, int]:
+    """登录限速查询：返回 (是否允许尝试, Retry-After 秒数)。
+
+    按来源 IP 与全局两个维度分别限速，任一维度封禁即拒绝。
+    """
+    ok_ip, retry_ip = LOGIN_GATE.check(f"ip:{client_ip}")
+    ok_global, retry_global = LOGIN_GATE.check("global")
+    if ok_ip and ok_global:
+        return True, 0
+    return False, max(retry_ip, retry_global)
+
+
+def gate_failure(client_ip: str) -> None:
+    LOGIN_GATE.failure(f"ip:{client_ip}")
+    LOGIN_GATE.failure("global")
+
+
+def gate_success(client_ip: str) -> None:
+    LOGIN_GATE.success(f"ip:{client_ip}")
+    LOGIN_GATE.success("global")
+
+
 def password_matches(candidate: str) -> bool:
     if not PASSWORD or not candidate:
         return False
@@ -317,7 +445,7 @@ LOGIN_PAGE = """<!DOCTYPE html>
 <title>Mikuxperia 管理面板 · 登录</title>
 <style>{style}</style></head>
 <body class="login-body">
-<form class="card login-card" method="post" action="/admin/login">
+<form class="card login-card" method="post" action="{action}">
   <div class="brand-mark">39</div>
   <h1>Mikuxperia 管理面板</h1>
   <p class="hint">请输入管理密码</p>
@@ -405,9 +533,9 @@ input.inp[type=number]{width:88px}
 """
 
 
-def login_page(error: str = "") -> str:
+def login_page(error: str = "", action: str | None = None) -> str:
     block = f'<div class="error">{escape(error)}</div>' if error else ""
-    return LOGIN_PAGE.format(style=STYLE, error=block)
+    return LOGIN_PAGE.format(style=STYLE, action=action or f"{_ADMIN_BASE}/login", error=block)
 
 
 def chip(ok: bool, good: str, bad: str, warn: bool = False) -> str:
@@ -426,6 +554,7 @@ def interval_input(seconds: int) -> tuple[int, str]:
 
 
 def dashboard_page(data: dict) -> str:
+    admin = _ADMIN_BASE
     stats = data["stats"]
     health = data["health"]
     news = data["news"]
@@ -513,17 +642,17 @@ def dashboard_page(data: dict) -> str:
         {f'<br>结果：{escape(task["last_message"])}' if task["last_message"] else ""}
       </div>
       <div class="task-forms">
-        <form method="post" action="/admin/task/run">
+        <form method="post" action="{admin}/task/run">
           <input type="hidden" name="task" value="{escape(task["name"])}">
           <button class="btn btn-raised" type="submit">立即执行</button>
         </form>
-        <form method="post" action="/admin/task/interval">
+        <form method="post" action="{admin}/task/interval">
           <input type="hidden" name="task" value="{escape(task["name"])}">
           <input class="inp" type="number" name="interval" min="1" step="1" value="{default_value}" required>
           <select class="inp" name="unit">{options}</select>
           <button class="btn" type="submit">保存间隔</button>
         </form>
-        <form method="post" action="/admin/task/toggle">
+        <form method="post" action="{admin}/task/toggle">
           <input type="hidden" name="task" value="{escape(task["name"])}">
           <input type="hidden" name="enabled" value="{"0" if task["enabled"] else "1"}">
           <button class="btn" type="submit">{"关闭自动" if task["enabled"] else "开启自动"}</button>
@@ -547,19 +676,19 @@ def dashboard_page(data: dict) -> str:
 <header class="appbar">
   <h1>Mikuxperia 管理面板</h1>
   <div class="actions">
-    <form method="post" action="/admin/task/run" style="display:inline">
+    <form method="post" action="{admin}/task/run" style="display:inline">
       <input type="hidden" name="task" value="weather">
       <button class="btn btn-ghost" type="submit">更新天气</button>
     </form>
-    <form method="post" action="/admin/task/run" style="display:inline">
+    <form method="post" action="{admin}/task/run" style="display:inline">
       <input type="hidden" name="task" value="news">
       <button class="btn btn-ghost" type="submit">刷新新闻</button>
     </form>
-    <form method="post" action="/admin/task/run" style="display:inline">
+    <form method="post" action="{admin}/task/run" style="display:inline">
       <input type="hidden" name="task" value="bilibili">
       <button class="btn btn-ghost" type="submit">同步收藏夹</button>
     </form>
-    <form method="post" action="/admin/logout" style="display:inline"><button class="btn btn-ghost" type="submit">退出</button></form>
+    <form method="post" action="{admin}/logout" style="display:inline"><button class="btn btn-ghost" type="submit">退出</button></form>
   </div>
 </header>
 <main class="wrap">
@@ -599,7 +728,7 @@ def dashboard_page(data: dict) -> str:
   <section class="card">
     <h2>上传歌曲</h2>
     <p class="sub">音频必填，封面与歌词可选。上传后自动写入 music.json 并提升播放列表版本号。</p>
-    <form method="post" action="/admin/upload" enctype="multipart/form-data">
+    <form method="post" action="{admin}/upload" enctype="multipart/form-data">
       <div class="upload">
         <label><span>歌曲标题（必填）</span><input type="text" name="title" maxlength="160" required></label>
         <label><span>作者</span><input type="text" name="artist" maxlength="80" placeholder="未知作者"></label>
