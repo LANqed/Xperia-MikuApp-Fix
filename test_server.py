@@ -83,7 +83,7 @@ class WeatherAdapterTest(unittest.TestCase):
         fetch.return_value = {"days": [forecast_day(day) for day in range(1, 9)]}
         xml = server.CompatibilityHandler.weather_xml(
             None,
-            {"APID": ["SC-04E_OTENKIMIKU"], "AREA": ["4410"]},
+            {"APID": ["SO-04E_OTENKIMIKU"], "AREA": ["4410"]},
         )
         root = ElementTree.fromstring(xml)
         groups = root.findall("weatherdata")
@@ -99,7 +99,7 @@ class WeatherAdapterTest(unittest.TestCase):
         fetch.return_value = {"days": [forecast_day(day) for day in range(1, 9)]}
         xml = server.CompatibilityHandler.weather_xml(
             None,
-            {"APID": ["SC-04E_OTENKIMIKU"], "AREA": ["9999"]},
+            {"APID": ["SO-04E_OTENKIMIKU"], "AREA": ["9999"]},
         )
         self.assertEqual(ElementTree.fromstring(xml).findtext("point"), f"{server.WEATHER_CITY}（和风天气）")
 

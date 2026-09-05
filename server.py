@@ -618,6 +618,18 @@ def admin_snapshot(message: str = "", error: str = "") -> dict:
     }
 
 
+# 同一台机器在不同地区 ROM 的型号前缀：docomo Xperia A = SO-04E，
+# 国际版 Xperia ZR = C5502 / C5503，中国版 = M36h。
+LEGACY_OTENKIMIKU_MODELS = frozenset({"SO-04E", "C5502", "C5503", "M36h"})
+
+
+def legacy_otenkimiku_apid(value: str) -> bool:
+    """校验旧版天气小组件的 APID，前缀机型不区分大小写。"""
+    return value.strip().upper() in {
+        f"{model}_OTENKIMIKU".upper() for model in LEGACY_OTENKIMIKU_MODELS
+    }
+
+
 class CompatibilityHandler(BaseHTTPRequestHandler):
     server_version = "MikuxperiaCompatibility/1.0"
 
@@ -984,7 +996,7 @@ class CompatibilityHandler(BaseHTTPRequestHandler):
 
     def weather_xml(self, form: dict[str, list[str]]) -> str:
         area = form.get("AREA", ["4410"])[0].zfill(4)
-        if form.get("APID", [""])[0] != "SC-04E_OTENKIMIKU":
+        if not legacy_otenkimiku_apid(form.get("APID", [""])[0]):
             raise RuntimeError("invalid legacy APID")
         payload = fetch_qweather()
         days = payload["days"][:8]

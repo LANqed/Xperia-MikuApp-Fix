@@ -1090,7 +1090,7 @@ adb install  patched/MikuDownloader.apk
 
 ### 12.5 别改动的东西
 
-- 天气的 `APID` 值 `SC-04E_OTENKIMIKU`：服务端靠它校验请求（见第 20.1 节）。
+- 天气的 `APID` 值 `SO-04E_OTENKIMIKU`：服务端靠它校验请求（见第 20.1 节）。
 - 歌曲 APP 的表单字段名 `feature_songs_provider[{N}][playlist_id]`、
   `[musicFileName]` 等：服务端按此格式解析。
 - 包名与 Activity / Service 类名：下载器返回的 `packageName` / `className`
@@ -1114,7 +1114,7 @@ adb install  patched/MikuDownloader.apk
 
 本目录下的 `Xperia_feat_original_FE_V5a.zip`（约 387 MB）是 Xperia feat. 整合联动包
 （V5a[FE]，作者 Tad-Liou；音频来自 YCx，壁纸来自 aurajp，应用为 R3 Crack 版），
-目标设备为 Xperia（SC-04E / Android 4.2），通过 TWRP 刷入。它把 Miku 应用、共享库、
+目标设备为 Xperia（SO-04E / Android 4.2），通过 TWRP 刷入。它把 Miku 应用、共享库、
 角色壁纸、铃声、通知音与输入法皮肤装进设备。联动包与服务端没有网络通信，但它
 刷入的共享库是第 12 节四个 APP 的安装前提。
 
@@ -1142,7 +1142,7 @@ adb install  patched/MikuDownloader.apk
 
 需要注意：
 
-- **脚本里没有设备型号断言**，刷错机型不会拦截，只应在 Xperia SC-04E 这类目标机上刷。
+- **脚本里没有设备型号断言**，刷错机型不会拦截，只应在 Xperia SO-04E 这类目标机上刷。
 - 会覆盖 `/system/media/audio` 下同名铃声/通知/闹钟，以及
   `wallpaperpicker` 的壁纸文件；`/system` 上已有的其他定制也会被覆盖。
 - `/data/app` 里的 11 个 APK 要到首次开机才由 PackageManager 逐个安装，开机明显
@@ -1772,7 +1772,7 @@ AI 汇总的内容仍可能出现事实错误或过时信息，重要信息请�
 
 ### 20.1 请求与缓存
 
-- 客户端表单里的 `APID` 必须是 `SC-04E_OTENKIMIKU`，否则返回 502 与 `invalid legacy APID`。
+- 客户端表单里的 `APID` 必须是 `SO-04E_OTENKIMIKU`，否则返回 502 与 `invalid legacy APID`。
 - 客户端的 `AREA` 只会被原样回显到 `<id>` 里，实际位置由 `[weather]` 的经纬度决定。
 - 服务端请求 `https://<api_host>/weather/v1/daily/<纬度>/<经度>?days=8&localTime=true&lang=zh`，超时 10 秒，自动处理 gzip 与 deflate 响应。
 - 返回的 `days` 少于 2 天视为异常，直接报错。
@@ -1891,7 +1891,7 @@ ss -ltnp | grep 8080
 
 ### 23.3 天气返回 502 或 QWeather 报错
 
-- `invalid legacy APID`：请求里的 `APID` 不是 `SC-04E_OTENKIMIKU`。用第 5 节的 `curl` 命令复现时要带上完整参数。
+- `invalid legacy APID`：请求里的 `APID` 不是 `SO-04E_OTENKIMIKU`。用第 5 节的 `curl` 命令复现时要带上完整参数。
 - `QWeather HTTP 401` 或 `403`：确认 `api_host` 与 `api_key` 来自同一个 QWeather 账号，套餐和接口权限有效。改完重启服务。
 - `QWEATHER_API_HOST is required`：`api_host` 为空。
 - `QWEATHER_API_KEY or QWEATHER_BEARER_TOKEN is required`：两个凭据都为空。
