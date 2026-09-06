@@ -714,6 +714,26 @@ class BilibiliSyncTest(unittest.TestCase):
             self.assertEqual(playlist["image"], "")
             self.assertEqual(skipped, [])
 
+    def test_combined_collect_dedupes_across_folders(self):
+        playlists = [
+            {"songs": [{"id": "BV1", "title": "a"}, {"id": "BV2", "title": "b"}]},
+            {"songs": [{"id": "BV2", "title": "b2"}, {"id": "BV3", "title": "c"}]},
+        ]
+        songs = bilisync.collect_folder_songs(playlists)
+        self.assertEqual([s["id"] for s in songs], ["BV1", "BV2", "BV3"])
+
+    def test_build_combined_splits_and_reserves_ids(self):
+        songs = [{"id": f"BV{i:04d}", "title": f"s{i}"} for i in range(1, 8)]
+        playlists = bilisync.build_combined_playlists([1001, 1002], songs, Path("unused"), 3, "合集")
+        self.assertEqual(len(playlists), 3)
+        self.assertEqual([p["id"] for p in playlists], [2000000000, 2000000001, 2000000002])
+        self.assertTrue(all(p.get("source_combined") for p in playlists))
+        self.assertEqual([p["title"] for p in playlists], ["合集 (1/3)", "合集 (2/3)", "合集 (3/3)"])
+        self.assertEqual(
+            [s["id"] for p in playlists for s in p["songs"]],
+            [f"BV{i:04d}" for i in range(1, 8)],
+        )
+
 
 class PlaylistVersionTest(unittest.TestCase):
     def setUp(self):

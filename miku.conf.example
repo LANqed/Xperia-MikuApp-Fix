@@ -53,6 +53,11 @@ max_videos_per_folder = 0
 songs_per_playlist = 50
 # 为 true 时重新下载已经缓存过的音频。
 redownload_existing = false
+# 为 true 时在保留各收藏夹播放列表的同时，追加一个包含全部已下载歌曲的
+# “合集”播放列表（同一视频跨文件夹只保留一次，超出上限同样自动拆分）。
+# 合集的播放列表 ID 从 20 亿起，不会与任何收藏夹分片或手工列表冲突。
+combined_enabled = false
+# combined_title = Bilibili 收藏夹合集
 
 [tasks]
 # 后台定时任务。间隔单位是秒，也可以在管理面板里修改，

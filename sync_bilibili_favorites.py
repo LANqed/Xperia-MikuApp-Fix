@@ -33,6 +33,10 @@ UNAVAILABLE_TITLES = {"已失效视频", "已失效稿件", "视频已失效", "
 JAVA_INT_MAX = 2147483647
 PLAYLIST_ID_BASE = 1000000000
 PLAYLIST_ID_SPAN = 1000000000
+# 按收藏夹推导出的播放列表 ID 落在 [10亿, ~20亿)，合集从 20 亿起，
+# 保证与任何收藏夹分片、手工列表都不冲突。
+COMBINED_ID_BASE = 2000000000
+DEFAULT_COMBINED_TITLE = "Bilibili 收藏夹合集"
 # 客户端把播放列表封面以 BLOB 形式存进 tbl_play_music_info 的一行，并通过
 # 2 MiB 的 CursorWindow 读取。两张 1920x1080 的原图就会溢出，导致
 # MusicListActivity 抛出 "Couldn't read row 0, col 0 from CursorWindow"
@@ -78,6 +82,9 @@ def read_settings(path: Path) -> dict:
             min(60, parser.getint("bilibili", "songs_per_playlist", fallback=DEFAULT_SONGS_PER_PLAYLIST)),
         ),
         "redownload": parser.getboolean("bilibili", "redownload_existing", fallback=False),
+        # 在保留各收藏夹播放列表的同时，追加一个包含全部已下载歌曲的合集。
+        "combined_enabled": parser.getboolean("bilibili", "combined_enabled", fallback=False),
+        "combined_title": parser.get("bilibili", "combined_title", fallback="").strip() or DEFAULT_COMBINED_TITLE,
     }
 
 
@@ -196,7 +203,11 @@ def resize_jpeg(source: Path, target: Path, width: int) -> bool:
         str(target),
     ]
     try:
-        subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        subprocess.run(
+            command, check=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace",
+        )
     except FileNotFoundError:
         return False
     except subprocess.CalledProcessError as error:
@@ -249,7 +260,11 @@ def convert_to_mp3(source: Path, redownload: bool = False) -> Path:
         str(temporary),
     ]
     try:
-        subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        subprocess.run(
+            command, check=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace",
+        )
     except FileNotFoundError as error:
         raise RuntimeError("需要 ffmpeg 才能将 Bilibili 音频转换为 MP3") from error
     except subprocess.CalledProcessError as error:
@@ -450,7 +465,11 @@ def download_audio(url: str, output_dir: Path, cookie_file: Path, bvid: str, red
     command, temporary = ytdlp_command(prefix, url, cookie_file, "bestaudio")
     command[1:1] = ["-x", "--audio-format", "mp3", "--audio-quality", "128K"]
     try:
-        subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        subprocess.run(
+            command, check=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace",
+        )
     except FileNotFoundError as error:
         raise RuntimeError("yt-dlp is not installed or not in PATH") from error
     except subprocess.CalledProcessError as error:
@@ -598,6 +617,72 @@ def sync_folder(
     return playlists, skipped
 
 
+def collect_folder_songs(generated: list[dict]) -> list[dict]:
+    """按收藏夹顺序收集全部已成功下载的歌曲，跨文件夹重复的视频只保留首次出现。
+
+    输入是各收藏夹生成的播放列表（每首歌曲的 id 即 bvid）。
+    """
+    seen: set[str] = set()
+    songs: list[dict] = []
+    for playlist in generated:
+        for song in playlist.get("songs", []):
+            key = str(song.get("id") or "").strip()
+            if key:
+                if key in seen:
+                    continue
+                seen.add(key)
+            songs.append(song)
+    return songs
+
+
+def build_combined_playlists(
+    folder_ids: list[int],
+    songs: list[dict],
+    media_root: Path,
+    songs_per_playlist: int,
+    title: str,
+) -> list[dict]:
+    """把去重后的全部歌曲打成合集播放列表（超出上限自动拆成 1/2/3… part）。
+
+    封面沿用对应歌曲已缓存的封面，并就地生成 list/brief 小尺寸变体。
+    """
+    media_base = media_root.parent
+    size = max(1, min(60, int(songs_per_playlist)))
+    chunks = [songs[index:index + size] for index in range(0, len(songs), size)] or [[]]
+    playlists: list[dict] = []
+    for part, chunk in enumerate(chunks):
+        cover_songs = [song for song in chunk if song.get("thumbnail")]
+        image = cover_songs[0]["thumbnail"] if cover_songs else ""
+        full_cover: Path | None = None
+        brief_cover: Path | None = None
+        if image:
+            source = media_base / image
+            if source.is_file():
+                try:
+                    full_cover = playlist_cover(source, LIST_COVER_WIDTH, "list")
+                    brief_cover = playlist_cover(source, BRIEF_COVER_WIDTH, "brief")
+                except (OSError, RuntimeError):
+                    pass
+        playlist_title = title
+        if len(chunks) > 1:
+            playlist_title += f" ({part + 1}/{len(chunks)})"
+        description = f"来自 {len(folder_ids)} 个 Bilibili 收藏夹的合集"
+        playlists.append({
+            "id": COMBINED_ID_BASE + part,
+            "version": playlist_version(),
+            "title": playlist_title,
+            "description": description,
+            "brief_description": description,
+            "image": full_cover.relative_to(media_base).as_posix() if full_cover else image,
+            "brief_image": brief_cover.relative_to(media_base).as_posix() if brief_cover else image,
+            "source": GENERATED_SOURCE,
+            "source_combined": True,
+            "source_parts": len(chunks),
+            "songs": chunk,
+        })
+    return playlists
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="同步 Bilibili 收藏夹到 Mikuxperia 播放列表")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
@@ -676,12 +761,28 @@ def main() -> int:
                     f"成功 {sum(len(item['songs']) for item in playlists)} 首，下载失败 {len(skipped)} 个"
                 )
         if not args.dry_run:
+            if settings["combined_enabled"] and generated:
+                combined_songs = collect_folder_songs(generated)
+                folder_total = sum(len(item["songs"]) for item in generated)
+                duplicated = folder_total - len(combined_songs)
+                combined_playlists = build_combined_playlists(
+                    folder_ids,
+                    combined_songs,
+                    media_root,
+                    songs_per_playlist,
+                    settings["combined_title"],
+                )
+                generated.extend(combined_playlists)
+                print(
+                    f"combined: 生成 {len(combined_playlists)} 个合集播放列表，"
+                    f"共 {len(combined_songs)} 首（去重 {duplicated} 首重复视频）"
+                )
             manual = [item for item in catalog["playlists"] if item.get("source") != GENERATED_SOURCE]
             catalog["playlists"] = manual + generated
             temporary = catalog_path.with_suffix(catalog_path.suffix + ".tmp")
             temporary.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             temporary.replace(catalog_path)
-            total = sum(len(item["songs"]) for item in generated)
+            total = sum(len(item["songs"]) for item in generated if not item.get("source_combined"))
             print(f"updated {catalog_path}: {len(catalog['playlists'])} playlist(s), {total} song(s)")
             if all_skipped:
                 print(f"skipped {len(all_skipped)} video(s):")
